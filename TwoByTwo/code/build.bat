@@ -10,6 +10,6 @@ pushd build
 
 rc.exe /nologo ../TwoByTwo/code/app.rc
 REM cl.exe %CompilerFlags% ../TwoByTwo/code/twobytwo.cpp /link %LinkerFlags%
-cl.exe %CompilerFlags% ../TwoByTwo/code/app.res ../TwoByTwo/code/win32_tbt.cpp /link %LinkerFlags% user32.lib gdi32.lib Comdlg32.lib
+cl.exe %CompilerFlags% ../TwoByTwo/code/app.res ../TwoByTwo/code/win32_tbt.cpp /link %LinkerFlags% user32.lib gdi32.lib Comdlg32.lib Shell32.lib
 
 popd

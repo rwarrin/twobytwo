@@ -3,6 +3,7 @@
 #include <windowsx.h>
 #include <richedit.h>
 #include <commctrl.h>
+#include <shellapi.h>
 #include <malloc.h>
 
 #include "tbt_common.h"
@@ -40,6 +41,8 @@ static HWND GlobalMoveTaskDownButton = 0;
 static HWND GlobalMoveTaskTopButton = 0;
 static HWND GlobalMoveTaskBottomButton = 0;
 static HWND GlobalStaticMoveWindow = 0;
+
+static NOTIFYICONDATA GlobalTrayIconHandle = {0};
 
 static char *GlobalStatusStrings[TaskState_Count] = {
     "Not Started",
@@ -322,6 +325,30 @@ UpdateTaskFromUIInputs(task *Task)
     Task->TaskUrgency = TaskUrgency;
     Task->TaskImportance = TaskImportance;
 #endif
+}
+
+static NOTIFYICONDATA
+ShowTrayIcon(HWND Window)
+{
+    HICON Icon = LoadIcon(GetModuleHandle(NULL), MAKEINTRESOURCE(1));
+
+    NOTIFYICONDATAA NotifyIconData = {0};
+    NotifyIconData.cbSize = sizeof(NotifyIconData);
+    NotifyIconData.hWnd = Window;
+    NotifyIconData.uFlags = NIF_ICON|NIF_TIP|NIF_MESSAGE;
+    NotifyIconData.uCallbackMessage = UI_TRAY_COMMAND;
+    NotifyIconData.hIcon = Icon;
+    strncpy(NotifyIconData.szTip, "2x2 - Task Manager", ArrayCount(NotifyIconData.szTip));
+
+    Shell_NotifyIcon(NIM_ADD, &NotifyIconData);
+
+    return(NotifyIconData);
+}
+
+static void
+RemoveTrayIcon(NOTIFYICONDATA *TrayIcon)
+{
+    Shell_NotifyIcon(NIM_DELETE, TrayIcon);
 }
 
 LRESULT
@@ -698,6 +725,40 @@ Win32Callback(HWND Window, UINT Message, WPARAM WParam, LPARAM LParam)
             }
         } break;
 
+        case UI_TRAY_COMMAND:
+        {
+            if((LParam == WM_RBUTTONUP) ||
+               (LParam == WM_LBUTTONUP))
+            {
+                HMENU TrayMenu = CreatePopupMenu();
+                MENUINFO TrayMenuInfo = {0};
+                TrayMenuInfo.cbSize = sizeof(MENUINFO);
+                TrayMenuInfo.dwStyle = MNS_NOTIFYBYPOS;
+                SetMenuInfo(TrayMenu, &TrayMenuInfo);
+                AppendMenu(TrayMenu, MF_STRING, UI_TRAY_COMMAND_SHOW, "Show");
+                AppendMenu(TrayMenu, MF_STRING, UI_TRAY_COMMAND_EXIT, "Quit");
+
+                POINT CursorPosition = {0};
+                GetCursorPos(&CursorPosition);
+                SetForegroundWindow(Window);
+
+                s32 MenuCommand = TrackPopupMenu(TrayMenu, TPM_NONOTIFY|TPM_RETURNCMD,
+                                                 CursorPosition.x, CursorPosition.y,
+                                                 0, Window, NULL);
+
+                if(MenuCommand == UI_TRAY_COMMAND_SHOW)
+                {
+                    ShowWindow(Window, SW_RESTORE);
+                    SetForegroundWindow(Window);
+                }
+                else if(MenuCommand == UI_TRAY_COMMAND_EXIT)
+                {
+                    RemoveTrayIcon(&GlobalTrayIconHandle);
+                    PostQuitMessage(0);
+                }
+            }
+        } break;
+
         case WM_TIMER:
         {
             u32 TimerID = (u32)WParam;
@@ -713,11 +774,25 @@ Win32Callback(HWND Window, UINT Message, WPARAM WParam, LPARAM LParam)
 
         case WM_SIZE:
         {
-            RECT ClientRect = {0};
-            GetClientRect(Window, &ClientRect);
-            u32 Width = ClientRect.right - ClientRect.left;
-            u32 Height = ClientRect.bottom - ClientRect.top;
-            MoveWindow(GlobalStatusBarHandle, 0, 0, Width, Height, true);
+            u32 SizeRequested = (u32)WParam;
+            if(SizeRequested == SIZE_MINIMIZED)
+            {
+                ShowWindow(Window, SW_HIDE);
+                GlobalTrayIconHandle = ShowTrayIcon(Window);
+            }
+            else
+            {
+                if(SizeRequested == SIZE_RESTORED)
+                {
+                    RemoveTrayIcon(&GlobalTrayIconHandle);
+                }
+
+                RECT ClientRect = {0};
+                GetClientRect(Window, &ClientRect);
+                u32 Width = ClientRect.right - ClientRect.left;
+                u32 Height = ClientRect.bottom - ClientRect.top;
+                MoveWindow(GlobalStatusBarHandle, 0, 0, Width, Height, true);
+            }
         } break;
 
         default:
