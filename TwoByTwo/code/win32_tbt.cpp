@@ -44,12 +44,26 @@ static HWND GlobalStaticMoveWindow = 0;
 
 static NOTIFYICONDATA GlobalTrayIconHandle = {0};
 
+static char GlobalWindowTitle[MAX_PATH + 32] = {0};
+static b32 GlobalHasUnsavedWork = false;
+
 static char *GlobalStatusStrings[TaskState_Count] = {
     "Not Started",
     "In Progress",
     "Complete",
     "Removed",
 };
+
+static char *
+GetWindowTitle()
+{
+
+    snprintf(GlobalWindowTitle, ArrayCount(GlobalWindowTitle),
+             "2x2 Task Manager - %s%c",
+             (GlobalSaveFileName[0] ? GlobalSaveFileName : "Untitled"),
+             (GlobalHasUnsavedWork ? '*' : ' '));
+    return(GlobalWindowTitle);
+}
 
 inline void
 BeginEditingTask(edit_task *EditTask, u32 ViewListID, u32 ViewListIndex, task *Task)
@@ -327,6 +341,56 @@ UpdateTaskFromUIInputs(task *Task)
 #endif
 }
 
+static void
+Win32UpdateWindowTitle(HWND Window)
+{
+    SetWindowTextA(Window, GetWindowTitle());
+}
+
+inline void
+SetUnsavedWorkStatus(b32 Status)
+{
+    GlobalHasUnsavedWork = Status;
+}
+
+static void
+Win32SaveTaskList(HWND Window, task_list *TaskList, char *FileName, b32 OverwriteSaveFileName = true)
+{
+    WriteTaskListToFile(TaskList, FileName);
+    if(OverwriteSaveFileName)
+    {
+        CopyNullTerminatedString(GlobalSaveFileName, FileName);
+    }
+
+    SetUnsavedWorkStatus(false);
+    Win32UpdateWindowTitle(Window);
+}
+
+static void
+Win32LoadTaskList(HWND Window, task_list *TaskList, char *FileName)
+{
+    EndEditingTask(&GlobalEditTask);
+
+    for(u32 ListIndex = 0; ListIndex < TaskWindow_Count; ++ListIndex)
+    {
+        task_view *TaskView = TaskViews + ListIndex;
+        HWND TaskWindow = TaskWindows[ListIndex];
+        ListView_SetItemCount(TaskWindow, TaskView->ListCount);
+        ListView_RedrawItems(TaskWindow, 0, TaskView->ListCount);
+        UpdateWindow(TaskWindow);
+    }
+
+    PurgeTaskList(TaskList);
+    ResetNextTaskID();
+    ReadTaskListFromFile(Arena, TaskList, FileName);
+    PopulateViewsFromTaskList(TaskList);
+
+    CopyNullTerminatedString(GlobalSaveFileName, FileName);
+
+    SetUnsavedWorkStatus(false);
+    Win32UpdateWindowTitle(Window);
+}
+
 static NOTIFYICONDATA
 ShowTrayIcon(HWND Window)
 {
@@ -351,16 +415,43 @@ RemoveTrayIcon(NOTIFYICONDATA *TrayIcon)
     Shell_NotifyIcon(NIM_DELETE, TrayIcon);
 }
 
+static b32
+Win32QuitApplication(HWND Window)
+{
+    b32 Exit = true;
+
+    if(GlobalHasUnsavedWork)
+    {
+        s32 Result = MessageBox(Window, "You have unsaved changes. Are you sure you want to exit?", "Unsaved work", MB_ICONWARNING|MB_OKCANCEL);
+        if(Result != IDOK)
+        {
+            Exit = false;
+        }
+    }
+
+    if(Exit)
+    {
+        PostQuitMessage(0);
+    }
+
+    return(Exit);
+}
+
 LRESULT
 Win32Callback(HWND Window, UINT Message, WPARAM WParam, LPARAM LParam)
 {
     LRESULT Result = 0;
     switch(Message)
     {
+        case WM_CLOSE:
+        {
+            OutputDebugStringA("WM_CLOSE\n");
+            Win32QuitApplication(Window);
+        } break;
+
         case WM_DESTROY:
         {
             OutputDebugStringA("WM_DESTROY\n");
-            PostQuitMessage(0);
         } break;
 
         case WM_NOTIFY:
@@ -494,6 +585,8 @@ Win32Callback(HWND Window, UINT Message, WPARAM WParam, LPARAM LParam)
 
                         EndEditingTask(&GlobalEditTask);
                         ResetTaskInputForm();
+                        SetUnsavedWorkStatus(true);
+                        Win32UpdateWindowTitle(Window);
                     }
 
                     OutputDebugStringA("UI_BUTTON_DELETE\n");
@@ -521,6 +614,8 @@ Win32Callback(HWND Window, UINT Message, WPARAM WParam, LPARAM LParam)
                             UpdateWindow(TaskWindow);
 
                             BeginEditingTask(&GlobalEditTask, ViewListIndex, (TaskView->ListCount - 1), Task);
+                            SetUnsavedWorkStatus(true);
+                            Win32UpdateWindowTitle(Window);
                         }
                     }
 
@@ -565,6 +660,9 @@ Win32Callback(HWND Window, UINT Message, WPARAM WParam, LPARAM LParam)
                             ListView_RedrawItems(TaskWindow, 0, TaskView->ListCount);
                             UpdateWindow(TaskWindow);
                         }
+
+                        SetUnsavedWorkStatus(true);
+                        Win32UpdateWindowTitle(Window);
                     }
 
                     OutputDebugStringA("UI_BUTTON_SAVEAS\n");
@@ -586,6 +684,8 @@ Win32Callback(HWND Window, UINT Message, WPARAM WParam, LPARAM LParam)
                             ListView_RedrawItems(TaskWindow, GlobalEditTask.ListIndex - 1, GlobalEditTask.ListIndex);
                             UpdateWindow(TaskWindow);
                             --GlobalEditTask.ListIndex;
+                            SetUnsavedWorkStatus(true);
+                            Win32UpdateWindowTitle(Window);
                         }
                     }
                     OutputDebugStringA("UI_BUTTON_MOVEUP\n");
@@ -607,6 +707,8 @@ Win32Callback(HWND Window, UINT Message, WPARAM WParam, LPARAM LParam)
                             ListView_RedrawItems(TaskWindow, GlobalEditTask.ListIndex, GlobalEditTask.ListIndex + 1);
                             UpdateWindow(TaskWindow);
                             ++GlobalEditTask.ListIndex;
+                            SetUnsavedWorkStatus(true);
+                            Win32UpdateWindowTitle(Window);
                         }
                     }
                     OutputDebugStringA("UI_BUTTON_MOVEDOWN\n");
@@ -631,6 +733,8 @@ Win32Callback(HWND Window, UINT Message, WPARAM WParam, LPARAM LParam)
                         UpdateWindow(TaskWindow);
 
                         GlobalEditTask.ListIndex = 0;
+                        SetUnsavedWorkStatus(true);
+                        Win32UpdateWindowTitle(Window);
                     }
                     OutputDebugStringA("UI_BUTTON_MOVETOP\n");
                 } break;
@@ -655,6 +759,8 @@ Win32Callback(HWND Window, UINT Message, WPARAM WParam, LPARAM LParam)
                         UpdateWindow(TaskWindow);
 
                         GlobalEditTask.ListIndex = MaxRow;
+                        SetUnsavedWorkStatus(true);
+                        Win32UpdateWindowTitle(Window);
                     }
                     OutputDebugStringA("UI_BUTTON_MOVEBOTTOM\n");
                 } break;
@@ -673,9 +779,7 @@ Win32Callback(HWND Window, UINT Message, WPARAM WParam, LPARAM LParam)
                     {
                         if(OpenFileName.lpstrFile[0])
                         {
-                            WriteTaskListToFile(GlobalTaskList, OpenFileName.lpstrFile);
-
-                            CopyNullTerminatedString(GlobalSaveFileName, OpenFileName.lpstrFile);
+                            Win32SaveTaskList(Window, GlobalTaskList, OpenFileName.lpstrFile);
                             OutputDebugStringA("APP_MENU_FILE_SAVE\n");
                         }
                     }
@@ -695,6 +799,8 @@ Win32Callback(HWND Window, UINT Message, WPARAM WParam, LPARAM LParam)
                     {
                         if(OpenFileName.lpstrFile[0])
                         {
+                            Win32LoadTaskList(Window, GlobalTaskList, OpenFileName.lpstrFile);
+#if 0
                             EndEditingTask(&GlobalEditTask);
 
                             for(u32 ListIndex = 0; ListIndex < TaskWindow_Count; ++ListIndex)
@@ -712,6 +818,7 @@ Win32Callback(HWND Window, UINT Message, WPARAM WParam, LPARAM LParam)
                             PopulateViewsFromTaskList(GlobalTaskList);
 
                             CopyNullTerminatedString(GlobalSaveFileName, OpenFileName.lpstrFile);
+#endif
                             OutputDebugStringA("\nAPP_MENU_FILE_LOAD\n");
                         }
                     }
@@ -720,7 +827,7 @@ Win32Callback(HWND Window, UINT Message, WPARAM WParam, LPARAM LParam)
                 case APP_MENU_FILE_EXIT:
                 {
                     OutputDebugStringA("APP_MENU_FILE_EXIT\n");
-                    PostQuitMessage(0);
+                    Win32QuitApplication(Window);
                 } break;
             }
         } break;
@@ -754,7 +861,7 @@ Win32Callback(HWND Window, UINT Message, WPARAM WParam, LPARAM LParam)
                 else if(MenuCommand == UI_TRAY_COMMAND_EXIT)
                 {
                     RemoveTrayIcon(&GlobalTrayIconHandle);
-                    PostQuitMessage(0);
+                    Win32QuitApplication(Window);
                 }
             }
         } break;
@@ -766,7 +873,7 @@ Win32Callback(HWND Window, UINT Message, WPARAM WParam, LPARAM LParam)
             {
                 if(GlobalSaveFileName[0])
                 {
-                    WriteTaskListToFile(GlobalTaskList, GlobalSaveFileName);
+                    Win32SaveTaskList(Window, GlobalTaskList, GlobalSaveFileName, false);
                     OutputDebugString("AUTOSAVE\n");
                 }
             }
@@ -824,7 +931,7 @@ WinMain(HINSTANCE Instance, HINSTANCE PrevInstance, LPSTR CmdLine, int CmdShow)
     }
 
     HWND Window = CreateWindowExA(0,
-                                  WindowClass.lpszClassName, "2x2 - Task Manager",
+                                  WindowClass.lpszClassName, GetWindowTitle(),
                                   WS_POPUPWINDOW|WS_CAPTION|WS_VISIBLE|WS_MINIMIZEBOX,
                                   CW_USEDEFAULT, CW_USEDEFAULT,
                                   1600, 780,
